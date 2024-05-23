@@ -1,3 +1,12 @@
+/**
+ * @file test_mma.cu
+ * @author sablin39
+ * @brief C=AB+D
+ * @version 0.1
+ * @date 2024-05-23
+ * 
+ */
+
 #include <cuda.h>
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
@@ -22,13 +31,15 @@
 template <typename T>
 void gen_rand_data(T *data, int n);
 
-template<typename TC, typename TA, typename TB, typename TiledMMA>
+template<typename TC, typename TA, typename TB, typename TD, typename TiledMMA>
 __global__ void
-test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
+test_gemm(TC *C, TA *A, TB *B, TD *D , int m, int n, int k) {
     using namespace cute;
     auto tensorA = make_tensor(make_gmem_ptr(A), make_shape(m,k), make_stride(k, Int<1>{}));
     auto tensorB = make_tensor(make_gmem_ptr(B), make_shape(n,k), make_stride(k, Int<1>{}));
     auto tensorC = make_tensor(make_gmem_ptr(C), make_shape(m,n), make_stride(Int<1>{}, m));
+    auto tensorD = make_tensor(make_gmem_ptr(D), make_shape(m,n), make_stride(Int<1>{}, m));
+
     int idx_x = blockIdx.x;
     int idx_y = blockIdx.y;
 
@@ -44,7 +55,7 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     auto gA = local_tile(tensorA, cta_tiler, cta_coord, Step<_1, X, _1>{});
     auto gB = local_tile(tensorB, cta_tiler, cta_coord, Step<X, _1, _1>{});
     auto gC = local_tile(tensorC, cta_tiler, cta_coord, Step<_1, _1, X>{});
-
+    auto gD = local_tile(tensorD, cta_tiler, cta_coord, Step<_1, _1, X>{});
 
     auto sA_layout = make_layout(make_shape (      bM,          bK),
                                  make_stride(Int<1>{}, bM+Int<8>{}));
@@ -80,6 +91,7 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     Tensor tCsB = thr_mma.partition_B(sB);
     Tensor tCgC = thr_mma.partition_C(gC);
     Tensor tCrC = thr_mma.make_fragment_C(tCgC);
+    Tensor tDgD = thr_mma.partition_C(gD);
     clear(tCrC);
 
     auto K_TILE_MAX = size<3>(tAgA);
@@ -96,7 +108,7 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
 
         gemm(mmaC, tCsA, tCsB, tCrC);
     }
-    axpby(1.0, tCrC, 0.0, tCgC);
+    axpby(1.0, tCrC, 1.0, tDgD);
 
 }
 
@@ -114,17 +126,22 @@ int main() {
     thrust::host_vector<Type> h_A(m*k);
     thrust::host_vector<Type> h_B(n*k);
     thrust::host_vector<Type> h_C(m*n);
+    thrust::host_vector<Type> h_D(m*n);
 
     gen_rand_data(thrust::raw_pointer_cast(h_A.data()), m*k);
 
     gen_rand_data(thrust::raw_pointer_cast(h_B.data()), n*k);
+
+    gen_rand_data(thrust::raw_pointer_cast(h_D.data()), m*n);
     
     thrust::device_vector<Type> A(m*k);
     thrust::device_vector<Type> B(n*k);
     thrust::device_vector<Type> C(m*n);
+    thrust::device_vector<Type> D(m*n);
     
     thrust::copy(h_A.begin(), h_A.end(), A.begin());
     thrust::copy(h_B.begin(), h_B.end(), B.begin());
+    thrust::copy(h_D.begin(), h_D.end(), D.begin());
 
     using mma_op = cute::SM80_16x8x8_F32TF32TF32F32_TN;
     using mma_traits = cute::MMA_Traits<mma_op>;
@@ -140,9 +157,10 @@ int main() {
     GPU_Clock gpu_clock;
     for (int iteration = 0; iteration < 10; iteration++) {
         gpu_clock.start();
-        test_gemm<Type, Type, Type, MMA><<<grid, block, 0, 0>>>(thrust::raw_pointer_cast(C.data()), 
+        test_gemm<Type, Type, Type, Type, MMA><<<grid, block, 0, 0>>>(thrust::raw_pointer_cast(C.data()), 
                                    thrust::raw_pointer_cast(A.data()), 
-                                   thrust::raw_pointer_cast(B.data()), 
+                                   thrust::raw_pointer_cast(B.data()),
+                                   thrust::raw_pointer_cast(D.data()), 
                                    m, n, k);
         CUTE_CHECK_LAST();
         double cute_time = gpu_clock.seconds();
