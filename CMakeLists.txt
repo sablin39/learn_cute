@@ -15,7 +15,7 @@ set(CMAKE_CUDA_ARCHITECTURES 90a)
 set(CMAKE_CUDA_COMPILER ${CUDAToolkit_ROOT}/bin/nvcc)
 
 # CuTe Path
-include_directories(~/cute_ws/install/include)
+include_directories(/home/jupyter-lzj/cute_ws/install/include)
 
 project("learn_cute" LANGUAGES CXX CUDA)
 add_subdirectory(src)
