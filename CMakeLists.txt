@@ -1,27 +1,35 @@
-cmake_minimum_required(VERSION 3.21)
-
-
-set(CMAKE_CUDA_STANDARD 17)
-set(CMAKE_C_STANDARD 17)
+cmake_minimum_required(VERSION 3.10)
+project(cute_gemm LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_ARCHITECTURES 80)
+# set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CONDA_PREFIX $ENV{CONDA_PREFIX})
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# add_compile_options(-Wall -O2 -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -O2 -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2 -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function")
 
+include_directories(cutlass/include)
+include_directories(cutlass/tools/util/include)
+include_directories(${CONDA_PREFIX}/include ${CONDA_PREFIX}/include/python3.10)
+include_directories(${CONDA_PREFIX}/lib/python3.11/site-packages/torch/include)
+link_directories(${CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib)
+# add_subdirectory(cute_gemm_example)
+find_package(pybind11 HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/pybind11/share/cmake REQUIRED)
+find_package(Torch HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/share/cmake REQUIRED)
+# find_library(c10 c10 HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib REQUIRED NO_DEFAULT_PATH)
+# find_library(torch torch HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib REQUIRED NO_DEFAULT_PATH)
+# find_library(torch_cpu torch_cpu HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib REQUIRED NO_DEFAULT_PATH)
+# find_library(torch_python torch_python HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib REQUIRED NO_DEFAULT_PATH)
+# find_library(c10_cuda c10_cuda HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib REQUIRED NO_DEFAULT_PATH)
+# find_library(torch_cuda torch_cuda HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/lib REQUIRED NO_DEFAULT_PATH)
 
-# CUDA Options
+message("TORCH_LIBRARIES:" ${TORCH_LIBRARIES})
+message("TORCH_PYTHON:" ${torch_python})
+# target_link_libraries(add_ext PRIVATE c10 torch torch_cpu torch_python cudart c10_cuda torch_cuda)
+# target_link_libraries(add_ext PRIVATE ${TORCH_LIBRARIES} ${CUDART_LIBRARY})
 
-set(CUDAToolkit_ROOT /home/jupyter-lzj/cuda-12.2)
-set(CMAKE_CUDA_ARCHITECTURES 90a)
-set(CMAKE_CUDA_COMPILER ${CUDAToolkit_ROOT}/bin/nvcc)
-
-# CuTe Path
-include_directories(/home/jupyter-lzj/cute_ws/install/include)
-
-project("learn_cute" LANGUAGES CXX CUDA)
-add_subdirectory(src)
-
-
-set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
-set(LIBRARY_OUTPUT_PATH ${PROJECT_BINARY_DIR}/lib)
-
-add_executable(demo src/demo.cu)
+# pybind11_add_module(add_ext interface.cpp)
+# add_executable(cute_gemm src/test_gemm.cu)
+add_executable(cute_mma src/test_mma.cu)
