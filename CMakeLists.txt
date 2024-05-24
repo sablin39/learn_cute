@@ -27,9 +27,9 @@ find_package(Torch HINTS $ENV{CONDA_PREFIX}/lib/python3.1/site-packages/torch/sh
 
 message("TORCH_LIBRARIES:" ${TORCH_LIBRARIES})
 message("TORCH_PYTHON:" ${torch_python})
-# target_link_libraries(add_ext PRIVATE c10 torch torch_cpu torch_python cudart c10_cuda torch_cuda)
-# target_link_libraries(add_ext PRIVATE ${TORCH_LIBRARIES} ${CUDART_LIBRARY})
+target_link_libraries(add_ext PRIVATE c10 torch torch_cpu torch_python cudart c10_cuda torch_cuda)
+target_link_libraries(add_ext PRIVATE ${TORCH_LIBRARIES} ${CUDART_LIBRARY})
 
-# pybind11_add_module(add_ext interface.cpp)
+pybind11_add_module(add_ext interface.cpp)
 # add_executable(cute_gemm src/test_gemm.cu)
-add_executable(cute_mma src/test_mma.cu)
+add_executable(pipe_gemm src/pipe_gemm.cu)

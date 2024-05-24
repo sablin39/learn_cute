@@ -6,9 +6,15 @@ The core abstractions of CuTe are hierarchically multidimensional layouts which 
 
 The official tutorials are in https://github.com/NVIDIA/cutlass/tree/main/media/docs/cute .
 
-## Repo Architecture
 
 
 ## How to run these things
 
-First you should have cutlass installed according to [the guidance](https://github.com/NVIDIA/cutlass/tree/main?tab=readme-ov-file#building-cutlass). Remember to modify paths in `CMakeLists.txt` so the compiler know where you've installed them.
+First clone this repo recursively since a branch of `cutlass` is already added as a submodule.
+```bash
+    git clone --recursive https://github.com/sablin39/learn_cute.git
+```
+
+We recommand you to setup a conda environment using [setup_env.sh](./setup_env.sh).
+
+Then you should have cutlass installed according to [the guidance](https://github.com/NVIDIA/cutlass/tree/main?tab=readme-ov-file#building-cutlass). Remember to modify paths in `CMakeLists.txt` if required.
