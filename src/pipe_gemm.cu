@@ -23,7 +23,7 @@ template <typename T>
 void gen_rand_data(T *data, int n);
 
 template<typename TC, typename TA, typename TB, 
-         typename TiledMMA, typename CopyA, typename CopyB>
+         typename TiledMMA, typename CopyA, typename CopyB, typename CopyA_r, typename CopyB_r>
 __global__ void
 test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     using namespace cute;
@@ -35,9 +35,9 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
 
     int thrIdx_x = threadIdx.x;
 
-    auto bM = Int<64>{};
-    auto bN = Int<64>{};
-    auto bK = Int<8>{};
+    auto bM = Int<128>{};
+    auto bN = Int<128>{};
+    auto bK = Int<32>{};
 
     auto cta_tiler = make_shape(bM, bN, bK);
     auto cta_coord = make_coord(idx_x, idx_y, _);
@@ -58,12 +58,6 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     Tensor sA = make_tensor(make_smem_ptr(smemA), sA_layout);
     Tensor sB = make_tensor(make_smem_ptr(smemB), sB_layout);
     
-    // TiledCopy copyA = make_tiled_copy(Copy_Atom<UniversalCopy<TA>, TA>{},
-    //                                   Layout<Shape<_32, _8>,Stride<_8, _1>>{},
-    //                                   Layout<Shape< _4, _1>>{});
-    // TiledCopy copyB = make_tiled_copy(Copy_Atom<UniversalCopy<TB>, TB>{},
-    //                                   Layout<Shape<_32, _8>,Stride<_8, _1>>{},
-    //                                   Layout<Shape< _4, _1>>{});
     CopyA copyA;
     ThrCopy thr_copy_a = copyA.get_slice(thrIdx_x);
     Tensor tAgA = thr_copy_a.partition_S(gA);
@@ -74,9 +68,6 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     Tensor tBgB = thr_copy_b.partition_S(gB);
     Tensor tBsB = thr_copy_b.partition_D(sB);
     Tensor tBrB = make_fragment_like(tBsB);
-
-    copy(copyA, tAgA(_,_,_,0), tArA);
-    copy(copyB, tBgB(_,_,_,0), tBrB);
 
     TiledMMA mmaC;
     ThrMMA thr_mma = mmaC.get_slice(thrIdx_x);
@@ -89,15 +80,10 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     auto K_TILE_MAX = size<3>(tAgA);
 
     for (int k_tile = 0; k_tile < K_TILE_MAX; ++k_tile) {
-        __syncthreads();
-        copy(tArA, tAsA);
-        copy(tBrB, tBsB);
-        __syncthreads();
 
-        int k_tile_next = (k_tile + 1 < K_TILE_MAX) ? k_tile + 1 : k_tile;
-        copy(copyA, tAgA(_,_,_,k_tile_next), tArA);
-        copy(copyB, tBgB(_,_,_,k_tile_next), tBrB);
-
+        copy(copyA, tAgA(_,_,_,k_tile), tAsA);
+        copy(copyB, tBgB(_,_,_,k_tile), tBsB);
+        __syncthreads();
         gemm(mmaC, tCsA, tCsB, tCrC);
     }
     axpby(1.0, tCrC, 0.0, tCgC);
@@ -131,13 +117,18 @@ int main() {
     thrust::copy(h_B.begin(), h_B.end(), B.begin());
 
     using namespace cute;
-    using g2s_copy_op = SM80_CP_ASYNC_CACHEALWAYS<uint128_t>;
-    using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
-    using g2s_copy_atom = Copy_Atom<g2s_copy_traits, Type>;
+    using g2s_copy_atom = Copy_Atom<Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>>, 
+                                    Type>;
     using G2SCopyA = decltype(make_tiled_copy(g2s_copy_atom{},
                          Layout<Shape<_32, _8>, Stride<_8, _1>>{},
                          Layout<Shape<_4, _1>>{}));
     using G2SCopyB = G2SCopyA;
+
+    using s2r_copy_op = SM75_U32x4_LDSM_N;
+    using s2r_copy_traits = Copy_Traits<s2r_copy_op>;
+    using s2r_copy_atom = Copy_Atom<s2r_copy_traits, Type>;
+    using S2RCopyAtomA = s2r_copy_atom;
+    using S2RCopyAtomB = s2r_copy_atom;
 
     using mma_atom = MMA_Atom<MMA_Traits<SM80_16x8x8_F32TF32TF32F32_TN>>;
     
@@ -149,11 +140,12 @@ int main() {
     dim3 block(128);
     dim3 grid(80, 80);
     double gflops = (2.0*m*n*k) * 1e-9;
-    // bool printflag = false;
     GPU_Clock gpu_clock;
     for (int iteration = 0; iteration < 10; iteration++) {
         gpu_clock.start();
-        test_gemm<Type, Type, Type, MMA, G2SCopyA, G2SCopyB><<<grid, block, 0, 0>>>(thrust::raw_pointer_cast(C.data()), 
+        test_gemm<Type, Type, Type, MMA, 
+                  G2SCopyA, G2SCopyB, 
+                  S2RCopyAtomA, S2RCopyAtomB><<<grid, block>>>(thrust::raw_pointer_cast(C.data()), 
                                    thrust::raw_pointer_cast(A.data()), 
                                    thrust::raw_pointer_cast(B.data()), 
                                    m, n, k);
@@ -161,15 +153,6 @@ int main() {
         double cute_time = gpu_clock.seconds();
         printf("CUTLASS time: %f ms, GFLOPS: %f\n", cute_time * 1e3, gflops / cute_time);
         thrust::host_vector<Type> C_result = C;
-        // if (!printflag) {
-        //     for (int i = 0; i < m; i++) {
-        //         for (int j = 0; j < n; j++) {
-        //             printf("%f ", C_result[i*n+j]);
-        //         }
-        //         printf("\n");
-        //     }
-        //     printflag = true;
-        // }
     }
     
 
