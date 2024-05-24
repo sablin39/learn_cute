@@ -35,8 +35,8 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
 
     int thrIdx_x = threadIdx.x;
 
-    auto bM = Int<64>{};
-    auto bN = Int<64>{};
+    auto bM = Int<128>{};
+    auto bN = Int<128>{};
     auto bK = Int<8>{};
 
     auto cta_tiler = make_shape(bM, bN, bK);
@@ -46,11 +46,16 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     auto gB = local_tile(tensorB, cta_tiler, cta_coord, Step<X, _1, _1>{});
     auto gC = local_tile(tensorC, cta_tiler, cta_coord, Step<_1, _1, X>{});
 
-
-    auto sA_layout = make_layout(make_shape (      bM,          bK),
-                                 make_stride(Int<1>{}, bM+Int<8>{}));
-    auto sB_layout = make_layout(make_shape (      bN,          bK),
-                                 make_stride(Int<1>{}, bN+Int<8>{}));
+    auto sA_layout_uncoa = make_layout(make_shape(      bM,          bK),
+                                 make_stride(Int<1>{}, bM+Int<1>{}));
+    auto sB_layout_uncoa = make_layout(make_shape(      bN,          bK),
+                                 make_stride(Int<1>{}, bN+Int<1>{}));
+    // auto sA_layout = make_layout(make_shape(      bM,          bK),
+    //                              make_stride(Int<1>{}, bM+Int<4>{}));
+    // auto sB_layout = make_layout(make_shape(      bN,          bK),
+    //                              make_stride(Int<1>{}, bN+Int<4>{}));
+    auto sA_layout = tile_to_shape(sA_layout_uncoa, make_shape(bM, bK));
+    auto sB_layout = tile_to_shape(sB_layout_uncoa, make_shape(bN, bK));
     auto sC_layout = make_layout(make_shape(bM, bN));
 
     __shared__ TA smemA[cosize_v<decltype(sA_layout)>];
@@ -65,6 +70,9 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     //                                   Layout<Shape<_32, _8>,Stride<_8, _1>>{},
     //                                   Layout<Shape< _4, _1>>{});
     CopyA copyA;
+    // if (thread0()) {
+    //     print_latex(copyA);
+    // }
     ThrCopy thr_copy_a = copyA.get_slice(thrIdx_x);
     Tensor tAgA = thr_copy_a.partition_S(gA);
     Tensor tAsA = thr_copy_a.partition_D(sA);
@@ -75,8 +83,9 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     Tensor tBsB = thr_copy_b.partition_D(sB);
     Tensor tBrB = make_fragment_like(tBsB);
 
-    copy(copyA, tAgA(_,_,_,0), tArA);
-    copy(copyB, tBgB(_,_,_,0), tBrB);
+    // copy(copyA, tAgA(_,_,_,0), tArA);
+    // copy(copyB, tBgB(_,_,_,0), tBrB);
+
 
     TiledMMA mmaC;
     ThrMMA thr_mma = mmaC.get_slice(thrIdx_x);
@@ -86,18 +95,33 @@ test_gemm(TC *C, TA *A, TB *B, int m, int n, int k) {
     Tensor tCrC = thr_mma.make_fragment_C(tCgC);
     clear(tCrC);
 
+    // #if 1
+    // if(thread0()) {
+    //     print("  mA : "); print(  tensorA); print("\n");
+    //     print("  gA : "); print(  gA); print("\n");
+    //     print("  sA : "); print(  sA); print("\n");
+    //     print("tAgA : "); print(tAgA); print("\n");
+    //     print("tAsA : "); print(tAsA); print("\n");
+    //     print("tAgA(_,_,_,0)"); print(tAgA(_,_,_,0)); print("\n");
+    // }
+    // #endif
+
+
+
     auto K_TILE_MAX = size<3>(tAgA);
 
     for (int k_tile = 0; k_tile < K_TILE_MAX; ++k_tile) {
-        __syncthreads();
-        copy(tArA, tAsA);
-        copy(tBrB, tBsB);
-        __syncthreads();
+        // __syncthreads();
+        // copy(tArA, tAsA);
+        // copy(tBrB, tBsB);
+        // __syncthreads();
 
-        int k_tile_next = (k_tile + 1 < K_TILE_MAX) ? k_tile + 1 : k_tile;
-        copy(copyA, tAgA(_,_,_,k_tile_next), tArA);
-        copy(copyB, tBgB(_,_,_,k_tile_next), tBrB);
-
+        // int k_tile_next = (k_tile + 1 < K_TILE_MAX) ? k_tile + 1 : k_tile;
+        // copy(copyA, tAgA(_,_,_,k_tile_next), tAsA);
+        // copy(copyB, tBgB(_,_,_,k_tile_next), tBsB);
+        copy(copyA, tAgA(_,_,_,k_tile), tAsA);
+        copy(copyB, tBgB(_,_,_,k_tile), tBsB);
+        __syncthreads();
         gemm(mmaC, tCsA, tCsB, tCrC);
     }
     axpby(1.0, tCrC, 0.0, tCgC);
@@ -130,30 +154,49 @@ int main() {
     thrust::copy(h_A.begin(), h_A.end(), A.begin());
     thrust::copy(h_B.begin(), h_B.end(), B.begin());
 
+// change this:
+    // using namespace cute;
+    // using g2s_copy_atom = Copy_Atom<Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>>, 
+    //                                 Type>;
+    // using G2SCopyA = decltype(make_tiled_copy(g2s_copy_atom{},
+    //                      Layout<Shape<_32, _8>>{},
+    //                      Layout<Shape<_4, _1>>{}));
+    // using G2SCopyB = G2SCopyA;
+// to:
     using namespace cute;
-    using g2s_copy_op = SM80_CP_ASYNC_CACHEALWAYS<uint128_t>;
-    using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
-    using g2s_copy_atom = Copy_Atom<g2s_copy_traits, Type>;
+    using g2s_copy_atom = Copy_Atom<Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS<uint32_t>>, 
+                                    Type>;
     using G2SCopyA = decltype(make_tiled_copy(g2s_copy_atom{},
-                         Layout<Shape<_32, _8>, Stride<_8, _1>>{},
+                         Layout<Shape<_32, _8>>{},
                          Layout<Shape<_4, _1>>{}));
     using G2SCopyB = G2SCopyA;
+// or:
+
+    
+
+
+    // using s2r_copy_op = SM75_U32x4_LDSM_N;
+    // using s2r_copy_traits = Copy_Traits<s2r_copy_op>;
+    // using s2r_copy_atom = Copy_Atom<s2r_copy_traits, Type>;
+    // using S2RCopyAtomA = s2r_copy_atom;
+    // using S2RCopyAtomB = s2r_copy_atom;
 
     using mma_atom = MMA_Atom<MMA_Traits<SM80_16x8x8_F32TF32TF32F32_TN>>;
     
     using MMA = decltype(make_tiled_mma(mma_atom{},
-                         Layout<Shape<_1, _2, _1>>{},
-                         Tile<_1, _1, _1>{}));
+                         Layout<Shape<_1, _2, _2>>{}));
+                        //  Tile<_1, _1, _1>{}));
 
 
-    dim3 block(128);
-    dim3 grid(80, 80);
+    dim3 block(256);
+    dim3 grid(40, 40);
     double gflops = (2.0*m*n*k) * 1e-9;
     // bool printflag = false;
     GPU_Clock gpu_clock;
     for (int iteration = 0; iteration < 10; iteration++) {
         gpu_clock.start();
-        test_gemm<Type, Type, Type, MMA, G2SCopyA, G2SCopyB><<<grid, block, 0, 0>>>(thrust::raw_pointer_cast(C.data()), 
+        test_gemm<Type, Type, Type, MMA, 
+                  G2SCopyA, G2SCopyB><<<grid, block>>>(thrust::raw_pointer_cast(C.data()), 
                                    thrust::raw_pointer_cast(A.data()), 
                                    thrust::raw_pointer_cast(B.data()), 
                                    m, n, k);
